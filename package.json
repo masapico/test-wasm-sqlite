@@ -1,0 +1,20 @@
+{
+  "name": "zipcode-db-importer",
+  "version": "1.0.0",
+  "description": "A script to import Japanese postal code CSV data into an SQLite database.",
+  "main": "import.js",
+  "scripts": {
+    "start": "node import.js"
+  },
+  "keywords": [
+    "sqlite",
+    "zipcode",
+    "importer"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "csv-parse": "^5.5.5",
+    "sqlite3": "^5.1.7"
+  }
+}

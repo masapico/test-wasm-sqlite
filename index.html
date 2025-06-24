@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SQLite-WASM 郵便番号検索</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      body {
+        font-family: "Inter", sans-serif;
+      }
+      .loader {
+        border-top-color: #3498db;
+        animation: spin 1s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+    </style>
+  </head>
+  <body class="bg-gray-100 text-gray-800">
+    <div class="container mx-auto p-4 md:p-8 max-w-4xl">
+      <header class="text-center mb-8">
+        <h1 class="text-3xl md:text-4xl font-bold text-gray-900">
+          SQLite-WASM 郵便番号検索
+        </h1>
+        <p class="mt-2 text-gray-600">
+          ブラウザ上で郵便番号から住所を検索します。
+        </p>
+      </header>
+
+      <main class="bg-white p-6 md:p-8 rounded-xl shadow-lg">
+        <!-- Status and Loader -->
+        <div
+          id="status-container"
+          class="text-center p-4 mb-6 bg-gray-50 rounded-lg"
+        >
+          <div
+            id="loader"
+            class="loader ease-linear rounded-full border-4 border-t-4 border-gray-200 h-12 w-12 mx-auto hidden"
+          ></div>
+          <p id="status-text" class="mt-2 font-medium text-gray-700">
+            データベースを読み込んでいます...
+          </p>
+        </div>
+
+        <!-- Search Form -->
+        <div id="search-form" class="hidden">
+          <div class="flex flex-col sm:flex-row gap-4">
+            <input
+              type="text"
+              id="zipcode-input"
+              placeholder="郵便番号を入力 (例: 1000001)"
+              class="flex-grow w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
+            />
+            <button
+              id="search-button"
+              class="w-full sm:w-auto bg-blue-600 text-white font-bold px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors shadow focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+            >
+              検索
+            </button>
+          </div>
+        </div>
+
+        <!-- Results -->
+        <div id="results-container" class="mt-8">
+          <p id="result-message" class="text-center text-gray-500 hidden"></p>
+          <div class="overflow-x-auto">
+            <table id="results-table" class="min-w-full bg-white hidden">
+              <thead class="bg-gray-50">
+                <tr>
+                  <th
+                    class="py-3 px-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider"
+                  >
+                    郵便番号
+                  </th>
+                  <th
+                    class="py-3 px-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider"
+                  >
+                    都道府県
+                  </th>
+                  <th
+                    class="py-3 px-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider"
+                  >
+                    市区町村
+                  </th>
+                  <th
+                    class="py-3 px-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider"
+                  >
+                    町域
+                  </th>
+                </tr>
+              </thead>
+              <tbody id="results-body" class="divide-y divide-gray-200">
+                <!-- Results will be inserted here -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </main>
+
+      <footer class="text-center mt-8 text-sm text-gray-500">
+        <p>
+          Powered by
+          <a
+            href="https://sqlite.org/wasm/doc/trunk/index.md"
+            target="_blank"
+            class="text-blue-600 hover:underline"
+            >sqlite-wasm</a
+          >
+        </p>
+      </footer>
+    </div>
+
+    <!-- The WASM-specific library -->
+    <script type="module">
+      import sqlite3InitModule from "https://cdn.jsdelivr.net/npm/@sqlite.org/sqlite-wasm@3.50.1-build1/+esm";
+
+      // --- DOM Elements ---
+      const loader = document.getElementById("loader");
+      const statusText = document.getElementById("status-text");
+      const searchForm = document.getElementById("search-form");
+      const searchInput = document.getElementById("zipcode-input");
+      const searchButton = document.getElementById("search-button");
+      const resultsContainer = document.getElementById("results-container");
+      const resultsTable = document.getElementById("results-table");
+      const resultsBody = document.getElementById("results-body");
+      const resultMessage = document.getElementById("result-message");
+
+      let db;
+
+      // --- Main Application Logic ---
+      const startApp = async () => {
+        try {
+          updateStatus("SQLite-WASMを初期化中...", true);
+          const sqlite3 = await sqlite3InitModule({
+            print: console.log,
+            printErr: console.error,
+          });
+
+          updateStatus("データベースファイルをダウンロード中 (約8MB)...", true);
+          const response = await fetch("./data/zipcode.db");
+          if (!response.ok) {
+            throw new Error(`Failed to fetch database: ${response.statusText}`);
+          }
+          const dbArrayBuffer = await response.arrayBuffer();
+
+          updateStatus("データベースを開いています...", true);
+          db = new sqlite3.oo1.DB();
+          const p = sqlite3.wasm.allocFromTypedArray(dbArrayBuffer);
+          db.onclose = {
+            after: () => sqlite3.wasm.dealloc(p),
+          };
+          const rc = sqlite3.capi.sqlite3_deserialize(
+            db.pointer,
+            "main",
+            p,
+            dbArrayBuffer.byteLength,
+            dbArrayBuffer.byteLength,
+            sqlite3.capi.SQLITE_DESERIALIZE_FREEONCLOSE |
+              sqlite3.capi.SQLITE_DESERIALIZE_RESIZEABLE
+          );
+          db.checkRc(rc);
+
+          updateStatus("準備が完了しました。", false, true);
+        } catch (err) {
+          console.error("Initialization error:", err);
+          updateStatus(
+            `エラーが発生しました: ${err.message}`,
+            false,
+            false,
+            true
+          );
+        }
+      };
+
+      const search = () => {
+        if (!db) {
+          alert("データベースがまだ準備できていません。");
+          return;
+        }
+
+        const query = searchInput.value.trim();
+        if (!query) {
+          clearResults();
+          showMessage("郵便番号を入力してください。");
+          return;
+        }
+
+        try {
+          const results = [];
+          db.exec({
+            sql: "SELECT zipcode, pref, city, town FROM postal_codes WHERE zipcode LIKE ?",
+            bind: [query + "%"],
+            rowMode: "object",
+            callback: (row) => {
+              results.push(row);
+            },
+          });
+
+          renderResults(results);
+        } catch (e) {
+          console.error(e);
+          showMessage(`検索中にエラーが発生しました: ${e.message}`, true);
+        }
+      };
+
+      // --- UI Helper Functions ---
+      const updateStatus = (
+        message,
+        showLoader,
+        showForm = false,
+        isError = false
+      ) => {
+        statusText.textContent = message;
+        statusText.className = `mt-2 font-medium ${
+          isError ? "text-red-600" : "text-gray-700"
+        }`;
+        loader.style.display = showLoader ? "block" : "none";
+        searchForm.style.display = showForm ? "block" : "none";
+        if (showForm) {
+          document.getElementById("status-container").classList.add("hidden");
+        }
+      };
+
+      const renderResults = (results) => {
+        clearResults();
+        if (results.length === 0) {
+          showMessage("該当する住所が見つかりませんでした。");
+        } else {
+          resultsTable.style.display = "table";
+          results.forEach((row) => {
+            const tr = document.createElement("tr");
+            tr.className = "hover:bg-gray-50";
+            tr.innerHTML = `
+                    <td class="py-3 px-4">${row.zipcode}</td>
+                    <td class="py-3 px-4">${row.pref}</td>
+                    <td class="py-3 px-4">${row.city}</td>
+                    <td class="py-3 px-4">${row.town}</td>
+                `;
+            resultsBody.appendChild(tr);
+          });
+          showMessage(`${results.length}件の住所が見つかりました。`);
+        }
+      };
+
+      const clearResults = () => {
+        resultsBody.innerHTML = "";
+        resultsTable.style.display = "none";
+        resultMessage.style.display = "none";
+      };
+
+      const showMessage = (message, isError = false) => {
+        resultMessage.textContent = message;
+        resultMessage.className = `text-center ${
+          isError ? "text-red-500" : "text-gray-500"
+        }`;
+        resultMessage.style.display = "block";
+      };
+
+      // --- Event Listeners ---
+      searchButton.addEventListener("click", search);
+      searchInput.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          search();
+        }
+      });
+
+      // Start the application
+      startApp();
+    </script>
+  </body>
+</html>
